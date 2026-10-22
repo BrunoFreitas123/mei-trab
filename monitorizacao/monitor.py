@@ -265,7 +265,9 @@ class Monitor:
         for instante, deadlock in deadlocks:
             if instante not in self.deadlocks_vistos:
                 self.deadlocks_vistos.add(instante)
-                registar_deadlock(instante, deadlock)
+                bases = {p.get("currentdbname") for p in deadlock.findall("./process-list/process")}
+                if BASE in bases:  # ignora deadlocks noutras bases de dados do servidor
+                    registar_deadlock(instante, deadlock)
 
 
 def main():

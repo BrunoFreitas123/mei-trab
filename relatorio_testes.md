@@ -31,9 +31,10 @@ Os testes foram automáticos, num único computador:
 - **Verificação do estado da base de dados:** foi feita por uma ligação de administração em READ UNCOMMITTED, para nunca ficar bloqueada.
 
 Ficaram de fora os pontos seguintes, que têm de ser testados à mão:
-- o script `doWork.sql`;
 - a ligação a partir de outros computadores;
 - os logins `aluno1` a `aluno3` (os testes usaram o `sa`).
+
+Os testes com o `doWork.sql` a correr ao mesmo tempo que as aplicações estão na secção 7.
 
 ## 4. Resultados
 
@@ -132,17 +133,92 @@ Relação com os testes T1 a T8 do ficheiro `TP1_o_que_fazer.md`:
 
 | Teste do plano | Coberto aqui? |
 |---|---|
-| T1: Browser enquanto o Edit tem alterações por confirmar | Só em READ COMMITTED (4.1). Faltam READ UNCOMMITTED e SNAPSHOT |
-| T2: dois Edit na mesma encomenda | Só a variante SNAPSHOT (4.3). Faltam READ UNCOMMITTED e READ COMMITTED (*lost update*) |
+| T1: Browser enquanto há alterações por confirmar | Sim, nos 5 níveis (8) |
+| T2: dois Edit na mesma encomenda | Só a variante SNAPSHOT (4.3). O *lost update* em READ COMMITTED foi observado nos testes reais com três computadores (`monitorizacao/eventos.log`) |
 | T3: deadlock em REPEATABLE READ | Sim (4.2) |
-| T4: Edit contra o doWork | Não |
+| T4: Edit contra o doWork | Sim (7.1) |
 | T5: fantasmas | Sim (4.4) |
-| T6: duas janelas com o doWork | Não |
-| T7: taxas de refresh | Só 1 ms (4.5). Faltam 0,1 s, 1 s, 5 s e 30 s |
-| T8: app Log bloqueada | Não |
+| T6: duas sessões com o doWork | Sim (7.2) |
+| T7: taxas de refresh | Sim: 1 ms (4.5) e 0,5 s, 2 s e 5 s com o doWork a alterar dados (7.3) |
+| T8: app Log bloqueada | Sim (7.1) |
 
-## 7. Próximos passos
+## 7. Testes com o doWork.sql
 
-1. Repetir os cenários com **três computadores** e os logins `aluno1` a `aluno3`, como pede o enunciado.
-2. Fazer os testes em falta (T1, T2, T4, T6, T7 e T8), com o `doWork.sql` a correr no SSMS.
-3. Em cada teste, guardar provas para o relatório: o resultado de `sys.dm_tran_locks` e `sys.dm_exec_requests` e, nos deadlocks, o grafo da sessão `system_health`.
+Feitos numa base de dados temporária com 20 encomendas. Foram usadas três versões do script:
+
+| Versão | Pausa entre operações | Duração |
+|---|---|---|
+| **Original** (o ficheiro do professor; só muda o nome da base de dados) | 15 s | 15 min |
+| **Cópia rápida** | 0,5 s | 20 s |
+| **Cópia sem pausa** (teste de esforço) | 0 s | 10 s |
+
+Antes de cada execução definiu-se o nível de isolamento do doWork com `SET TRANSACTION ISOLATION LEVEL`, tal como se faz no SSMS.
+
+### 7.1 Edit contra o doWork (T4); Log e Browser bloqueados (T8)
+
+| Montagem | Resultado |
+|---|---|
+| O Edit (READ COMMITTED) aplica uma morada na encomenda mais recente (20), sem guardar. O doWork original, o Log e o Browser correm em READ COMMITTED | O doWork **fica bloqueado** logo na primeira operação (`INSERIR`, ao ler o `MAX(EncId)`), com `LCK_M_S`. O Log e o Browser também ficam bloqueados |
+| O Edit faz `COMMIT` | O doWork insere a encomenda 21 **51 ms depois**; o Log e o Browser desbloqueiam |
+| Repete-se com o doWork em READ UNCOMMITTED | O doWork **não bloqueia**: faz um `ACTUALIZAR` à encomenda 8 enquanto a 20 continua por confirmar |
+
+**Interpretação:**
+- Em READ COMMITTED, as leituras do doWork precisam de trincos S e ficam à espera do trinco X do Edit. Estão em causa o `MAX(EncId)` do `INSERIR` e o `COUNT(*)` e `ROW_NUMBER()` do `ACTUALIZAR` e do `APAGAR`.
+- Em READ UNCOMMITTED, essas leituras não pedem trincos. As escritas continuam a pedir X, mas noutras linhas, porque o doWork nunca escolhe a encomenda mais recente para alterar ou apagar.
+
+**Nota:** o SQL Server indicou como bloqueadora da sessão do doWork outra sessão que **também estava à espera** (a fila do recurso), e não o Edit. Para encontrar quem tem o trinco, é preciso seguir a cadeia até à sessão que não espera por ninguém. É o que o monitor faz.
+
+### 7.2 Duas sessões com o doWork em simultâneo (T6)
+
+| Versão do doWork | Nível | Operações (sessão 1 / sessão 2) | Violações de PK (2627) | Deadlocks (1205) |
+|---|---|---|---|---|
+| Cópia rápida | READ COMMITTED | 39 / 39 | 0 | 0 |
+| Cópia rápida | SERIALIZABLE | 40 / 40 | 0 | 0 |
+| Sem pausa | READ COMMITTED | 1 422 / 1 423 | 30 / 41 | 0 |
+| Sem pausa | SERIALIZABLE | **2** / 1 326 | 0 | **1** (a sessão 1 parou aos 2,7 s) |
+
+**Interpretação:**
+- **Com pausas** entre operações, as transações do doWork (que duram milissegundos) quase nunca se sobrepõem, por isso não houve conflitos. Com o doWork original (15 s de pausa), a probabilidade é ainda menor.
+- **Sem pausa, em READ COMMITTED,** houve 71 colisões no `MAX(EncId)+1`: as duas sessões calcularam o mesmo EncId. O ciclo de tentativas do `INSERIR_ENCOMENDA` resolveu-as todas, e todas as inserções acabaram por ser feitas.
+- **Sem pausa, em SERIALIZABLE,** os trincos de intervalo do `MAX(EncId)` e do `COUNT(*)` chocam com as inserções da outra sessão e provocam um deadlock aos 2,7 s. A vítima recebeu o erro 1205, que **aborta o batch inteiro**, e o ciclo do doWork terminou. A outra sessão continuou normalmente.
+
+### 7.3 Taxas de refresh do Browser com o doWork a alterar dados (T7)
+
+Cópia rápida do doWork (cerca de 2 alterações por segundo), Browser em READ COMMITTED, 15 s por taxa:
+
+| Refresh | Refreshes | Intervalo real | Duração da consulta | Alterações feitas pelo doWork | Vezes que o Browser viu a lista mudar | Atraso máximo dos dados |
+|---|---|---|---|---|---|---|
+| 500 ms | 30 | 516 ms | 41 ms | 30 | 29 | ≈ 0,5 s |
+| 2000 ms | 8 | 2009 ms | 41 ms | 30 | 7 | ≈ 2 s |
+| 5000 ms | 3 | 5013 ms | 42 ms | 30 | 2 | ≈ 5 s |
+
+**Interpretação:**
+- Os dados mostrados podem ter um atraso até ao intervalo de refresh mais a duração da consulta.
+- Com refresh lento, várias alterações ficam juntas num só refresh: o utilizador vê o estado final, mas não as alterações intermédias. É o risco de decidir com dados desatualizados de que fala o enunciado.
+- Com refresh rápido, o Browser acompanha o doWork, mas faz mais consultas ao servidor e, em READ COMMITTED, fica mais vezes sujeito a bloqueios.
+- Abaixo da duração da consulta (~40 ms) não se ganha nada (ver 4.5).
+
+## 8. Níveis de isolamento do Browser (T1)
+
+Outra sessão alterou a morada e uma quantidade da encomenda 3, sem confirmar. O Browser mudou de nível pelo seletor e fez refresh:
+
+| Nível do Browser | Durante a alteração por confirmar | Depois do ROLLBACK |
+|---|---|---|
+| READ UNCOMMITTED | não bloqueia; mostra os valores por confirmar (**leitura suja**) | valores originais |
+| READ COMMITTED | **bloqueia** até a alteração terminar | valores originais |
+| REPEATABLE READ | **bloqueia** | valores originais |
+| SERIALIZABLE | **bloqueia** | valores originais |
+| SNAPSHOT (desligado na base de dados) | erro 3952, com explicação | — |
+| SNAPSHOT (ligado na base de dados) | não bloqueia; mostra a última versão confirmada | valores originais |
+
+Em todos os casos, o servidor confirmou o nível escolhido (`sys.dm_exec_sessions`).
+
+Mais duas verificações:
+- **Trincos entre refreshes:** em REPEATABLE READ e SERIALIZABLE, o Browser não prende trincos entre refreshes. Cada `SELECT` corre em autocommit, e logo a seguir outra sessão consegue escrever na mesma linha.
+- **Mudar de nível com o Browser bloqueado:** a mudança fica na fila atrás da consulta bloqueada. Aparece o aviso "só muda quando a consulta em curso terminar", e o nível novo é aplicado, com refresh automático, assim que a consulta termina.
+
+## 9. Próximos passos
+
+1. Documentar os testes reais feitos com **três computadores** a 22/10 (*lost update*, bloqueios de leitura e de escrita, leitura suja e queda de rede a meio de uma transação), a partir de `monitorizacao/eventos.log`.
+2. Repetir com três computadores os cenários que ainda não foram feitos assim: deadlock em REPEATABLE READ, SNAPSHOT e o Edit contra o doWork original no SSMS.
+3. Em cada teste, guardar provas: o resultado de `sys.dm_tran_locks` e `sys.dm_exec_requests` e, nos deadlocks, o grafo `.xdl` gravado pelo monitor.
