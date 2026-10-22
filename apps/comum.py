@@ -264,34 +264,52 @@ class SessaoBD:
 # ---------------------------------------------------------------------------
 
 class SeletorNivel(ttk.Frame):
-    """Caixa para mudar o nível de isolamento da sessão (SET TRANSACTION ISOLATION LEVEL)."""
+    """Caixa para mudar o nível de isolamento da sessão (SET TRANSACTION ISOLATION LEVEL).
+
+    A sessão executa um pedido de cada vez: se estiver bloqueada numa consulta, a mudança
+    de nível fica na fila e só é aplicada quando essa consulta terminar. Nesse caso aparece
+    um aviso ao lado da caixa até o servidor confirmar o novo nível.
+    """
 
     def __init__(self, master, sessao, nivel_inicial, ao_mudar):
         super().__init__(master)
         self.sessao = sessao
         self.ao_mudar = ao_mudar
         self.atual = nivel_inicial
+        self.pedidos = 0  # mudanças de nível ainda não confirmadas pelo servidor
         ttk.Label(self, text="Nível de isolamento:").pack(side="left")
         self.var = tk.StringVar(value=nivel_inicial)
         self.caixa = ttk.Combobox(self, textvariable=self.var, values=NIVEIS_ISOLAMENTO,
                                   state="readonly", width=18)
         self.caixa.pack(side="left", padx=(4, 0))
         self.caixa.bind("<<ComboboxSelected>>", self._escolhido)
+        self.aviso = ttk.Label(self, foreground="#b45309")
+        self.aviso.pack(side="left", padx=(6, 0))
 
     def ativar(self, sim):
         self.caixa.configure(state="readonly" if sim else "disabled")
 
     def _escolhido(self, _evento):
-        if self.var.get() != self.atual:
-            self.sessao.mudar_nivel(self.var.get(), self._confirmado, self._falhou)
+        if self.var.get() == self.atual and not self.pedidos:
+            return
+        self.pedidos += 1
+        if self.sessao.ocupada_desde is not None:
+            self.aviso.configure(text="só muda quando a consulta em curso terminar")
+        self.sessao.mudar_nivel(self.var.get(), self._confirmado, self._falhou)
 
     def _confirmado(self, nivel):
+        self.pedidos -= 1
         self.atual = nivel
-        self.var.set(nivel)
+        if not self.pedidos:  # com vários pedidos na fila, a caixa mostra o último escolhido
+            self.var.set(nivel)
+            self.aviso.configure(text="")
         self.ao_mudar(nivel)
 
     def _falhou(self, exc):
-        self.var.set(self.atual)
+        self.pedidos -= 1
+        if not self.pedidos:
+            self.var.set(self.atual)
+            self.aviso.configure(text="")
         messagebox.showerror("Nível de isolamento", descrever_erro(exc), parent=self)
 
 

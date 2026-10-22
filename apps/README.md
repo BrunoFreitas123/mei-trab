@@ -78,6 +78,7 @@ Quando uma instrução demora mais de 0,5 s, aparece **"À espera do servidor h�
 - **Medições:** por baixo dos controlos aparecem a duração da consulta, o intervalo real médio entre ticks e os ticks saltados (que chegaram com o refresh anterior ainda em curso). É o material para o estudo da taxa de refrescamento.
   - Medido no portátil do servidor: com o timer a 1 ms, o intervalo real médio ficou em ~15 ms, a resolução do relógio do Windows.
 - **Transações das leituras:** cada `SELECT` corre em autocommit, ou seja, numa transação própria. Em REPEATABLE READ e SERIALIZABLE, os trincos de leitura duram só a consulta.
+- **Mudar de nível:** a aplicação faz logo um refresh com o nível novo. Se a sessão estiver bloqueada numa consulta, a mudança fica na fila e só é aplicada quando essa consulta terminar. Enquanto isso, aparece o aviso "só muda quando a consulta em curso terminar".
 
 ## Monitorizar (no SSMS, como `sa`)
 

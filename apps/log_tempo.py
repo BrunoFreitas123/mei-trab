@@ -30,7 +30,7 @@ class JanelaLogTempo:
         topo.pack(fill="x")
         self.barra = BarraEstado(raiz, sessao, nivel)
         self.barra.pack(fill="x", side="bottom")
-        SeletorNivel(topo, sessao, nivel, self.barra.mostrar_nivel).pack(side="left", anchor="n")
+        SeletorNivel(topo, sessao, nivel, self._nivel_mudou).pack(side="left", anchor="n")
         self.refresh = Refrescamento(topo, sessao, lambda: self._ler, self._mostrar, intervalo_ms=2000)
         self.refresh.pack(side="left", padx=(24, 0), fill="x", expand=True)
 
@@ -44,6 +44,10 @@ class JanelaLogTempo:
         ttk.Label(raiz, textvariable=self.total, padding=(8, 0)).pack(fill="x")
 
         self.refresh.iniciar_automatico()
+
+    def _nivel_mudou(self, nivel):
+        self.barra.mostrar_nivel(nivel)
+        self.refresh.refrescar()  # mostra logo os dados vistos com o novo nível
 
     @staticmethod
     def _ler(cursor):

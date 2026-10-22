@@ -27,7 +27,7 @@ class JanelaBrowser:
         topo.pack(fill="x")
         self.barra = BarraEstado(raiz, sessao, nivel)
         self.barra.pack(fill="x", side="bottom")
-        SeletorNivel(topo, sessao, nivel, self.barra.mostrar_nivel).pack(side="left", anchor="n")
+        SeletorNivel(topo, sessao, nivel, self._nivel_mudou).pack(side="left", anchor="n")
         self.refresh = Refrescamento(topo, sessao, self._tarefa_refresh, self._mostrar)
         self.refresh.pack(side="left", padx=(24, 0), fill="x", expand=True)
 
@@ -51,6 +51,10 @@ class JanelaBrowser:
 
         self.grelha_enc.bind("<<TreeviewSelect>>", self._selecionou)
         self.refresh.refrescar()
+
+    def _nivel_mudou(self, nivel):
+        self.barra.mostrar_nivel(nivel)
+        self.refresh.refrescar()  # mostra logo os dados vistos com o novo nível
 
     def _enc_selecionada(self):
         selecao = self.grelha_enc.selection()

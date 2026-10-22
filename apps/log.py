@@ -15,7 +15,7 @@ class JanelaLog:
         topo.pack(fill="x")
         self.barra = BarraEstado(raiz, sessao, nivel)
         self.barra.pack(fill="x", side="bottom")
-        SeletorNivel(topo, sessao, nivel, self.barra.mostrar_nivel).pack(side="left", anchor="n")
+        SeletorNivel(topo, sessao, nivel, self._nivel_mudou).pack(side="left", anchor="n")
         ttk.Label(topo, text="N =").pack(side="left", padx=(24, 4), anchor="n")
         self.var_n = tk.StringVar(value="20")
         ttk.Spinbox(topo, from_=1, to=1000, textvariable=self.var_n, width=6).pack(side="left", anchor="n")
@@ -34,6 +34,10 @@ class JanelaLog:
         quadro.pack(fill="both", expand=True, padx=8, pady=(0, 4))
 
         self.refresh.iniciar_automatico()
+
+    def _nivel_mudou(self, nivel):
+        self.barra.mostrar_nivel(nivel)
+        self.refresh.refrescar()  # mostra logo os dados vistos com o novo nível
 
     def _tarefa(self):
         try:
