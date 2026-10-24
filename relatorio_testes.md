@@ -134,7 +134,7 @@ Relação com os testes T1 a T8 do ficheiro `TP1_o_que_fazer.md`:
 | Teste do plano | Coberto aqui? |
 |---|---|
 | T1: Browser enquanto há alterações por confirmar | Sim, nos 5 níveis (8) |
-| T2: dois Edit na mesma encomenda | Só a variante SNAPSHOT (4.3). O *lost update* em READ COMMITTED foi observado nos testes reais com três computadores (`monitorizacao/eventos.log`) |
+| T2: dois Edit na mesma encomenda | Sim. READ UNCOMMITTED (leitura suja) e READ COMMITTED (*lost update*, leitura bloqueada) nos testes reais com três computadores (`monitorizacao/eventos.log`); SNAPSHOT no teste automático (4.3) e no servidor da aula (9) |
 | T3: deadlock em REPEATABLE READ | Sim (4.2) |
 | T4: Edit contra o doWork | Sim (7.1) |
 | T5: fantasmas | Sim (4.4) |
@@ -217,8 +217,23 @@ Mais duas verificações:
 - **Trincos entre refreshes:** em REPEATABLE READ e SERIALIZABLE, o Browser não prende trincos entre refreshes. Cada `SELECT` corre em autocommit, e logo a seguir outra sessão consegue escrever na mesma linha.
 - **Mudar de nível com o Browser bloqueado:** a mudança fica na fila atrás da consulta bloqueada. Aparece o aviso "só muda quando a consulta em curso terminar", e o nível novo é aplicado, com refresh automático, assim que a consulta termina.
 
-## 9. Próximos passos
+## 9. Conflito em SNAPSHOT no servidor da aula
+
+Observado com as aplicações num servidor diferente do nosso Docker, na base de dados `SGBD_PL1_01`, onde o SNAPSHOT está ativo.
+
+| Passo | O que aconteceu |
+|---|---|
+| 1 | Um Edit em **SNAPSHOT** (SPID 56) abriu uma encomenda. A transação passou a ver os dados como estavam nesse instante |
+| 2 | Outra transação alterou e **confirmou** uma linha da `EncLinha` dessa encomenda, com a transação do Edit ainda aberta |
+| 3 | O Edit tentou gravar essa mesma linha e recebeu o **erro 3960**: *"Snapshot isolation transaction aborted due to update conflict"* |
+| 4 | O SQL Server **desfez a transação** do Edit. A aplicação mostrou a explicação, fechou o registo `'O'` e indicou que bastava reabrir a encomenda para repetir a alteração |
+
+**Interpretação:** é a confirmação, com máquinas reais, do teste automático 4.3. O SNAPSHOT evita o *lost update* por controlo de concorrência **otimista**: ninguém fica bloqueado à espera, mas quem confirma em segundo lugar é avisado e tem de repetir a operação sobre os dados atuais. Em READ COMMITTED, o mesmo cenário deu dois *lost updates* sem nenhum aviso (testes reais de 22/10).
+
+A mensagem não identifica a outra transação: pode ter sido outro Edit a alterar a mesma linha, ou o doWork a apagar a encomenda.
+
+## 10. Próximos passos
 
 1. Documentar os testes reais feitos com **três computadores** a 22/10 (*lost update*, bloqueios de leitura e de escrita, leitura suja e queda de rede a meio de uma transação), a partir de `monitorizacao/eventos.log`.
-2. Repetir com três computadores os cenários que ainda não foram feitos assim: deadlock em REPEATABLE READ, SNAPSHOT e o Edit contra o doWork original no SSMS.
+2. Repetir com três computadores os cenários que ainda não foram feitos assim: deadlock em REPEATABLE READ e o Edit contra o doWork original no SSMS.
 3. Em cada teste, guardar provas: o resultado de `sys.dm_tran_locks` e `sys.dm_exec_requests` e, nos deadlocks, o grafo `.xdl` gravado pelo monitor.

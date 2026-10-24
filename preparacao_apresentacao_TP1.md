@@ -121,7 +121,7 @@ Depende do que se quer evitar:
 - **SNAPSHOT** não bloqueia leituras e deteta o conflito (erro 3960): o segundo a gravar é avisado.
 - **READ COMMITTED com `UPDLOCK` na leitura** põe os editores em fila, sem deadlock.
 
-A nossa escolha: **SNAPSHOT** ou **READ COMMITTED + `UPDLOCK`**.
+A nossa escolha: **SNAPSHOT** ou **READ COMMITTED + `UPDLOCK`**. O SNAPSHOT foi confirmado na prática no servidor da aula: o segundo a gravar recebeu o erro 3960, em vez de apagar a alteração do primeiro (ver secção 4).
 
 **Porque é que o Browser lê em autocommit?**
 Cada refresh é uma transação curta. Assim, em REPEATABLE READ e SERIALIZABLE, o Browser **não prende trincos entre refreshes**: só se distingue do READ COMMITTED durante a própria consulta.
@@ -163,6 +163,13 @@ Pode configurar-se, mas medimos **~15 ms** reais, que é a resolução do relóg
 | 17:10:14 | **Queda de rede**: a transação aberta do Bruno foi desfeita automaticamente |
 | ~18:10 | Um Edit com uma alteração por confirmar bloqueou **três sessões**, incluindo o Browser do próprio utilizador. A que esperou mais tempo esteve ~8 minutos à espera |
 
+**No servidor da aula** (base de dados `SGBD_PL1_01`, com SNAPSHOT ativo):
+- Um Edit em **SNAPSHOT** tentou gravar uma linha da `EncLinha` que outra transação tinha **alterado e confirmado** depois de ele começar.
+- O SQL Server devolveu o erro **3960** (*update conflict*) e **abortou a transação**, em vez de deixar acontecer o *lost update*.
+- A aplicação explicou o erro, fechou o registo `'O'` e indicou que bastava abrir a encomenda de novo para repetir a alteração sobre os valores atuais.
+
+Comparem com o READ COMMITTED: no mesmo cenário (16:49:42), a segunda gravação apagou a primeira **sem nenhum aviso**. É a diferença entre controlo de concorrência pessimista (trincos) e otimista (versões): no SNAPSHOT ninguém espera, mas quem confirma em segundo lugar é avisado e tem de repetir.
+
 **Testes automáticos** (`relatorio_testes.md`):
 - **Deadlock** em REPEATABLE READ entre dois Edit, detetado em ~5 s, com uma vítima.
 - **Fantasmas** em REPEATABLE READ; em SERIALIZABLE, o INSERT da outra sessão ficou bloqueado.
@@ -186,7 +193,7 @@ Pode configurar-se, mas medimos **~15 ms** reais, que é a resolução do relóg
    Os fantasmas. O SERIALIZABLE usa trincos de intervalo, que impedem inserções no intervalo lido.
 
 4. **Que nível evita o *lost update*?**
-   O REPEATABLE READ (resolve-o com bloqueio ou deadlock) e o SNAPSHOT (com o erro 3960). Também se evita com `UPDLOCK` ou com concorrência otimista. O READ COMMITTED **não** o evita.
+   O REPEATABLE READ (resolve-o com bloqueio ou deadlock) e o SNAPSHOT (com o erro 3960, que vimos no servidor da aula). Também se evita com `UPDLOCK` ou com concorrência otimista. O READ COMMITTED **não** o evita.
 
 5. **Para que serve o trinco U?**
    Evita deadlocks de conversão: só uma sessão de cada vez pode estar "a caminho" de X na mesma linha.
