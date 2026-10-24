@@ -19,13 +19,13 @@ def ler_linhas(cursor, enc_id):
 
 
 class JanelaBrowser:
-    def __init__(self, raiz, sessao, nivel):
+    def __init__(self, raiz, sessao, nivel, ao_logout=None):
         self.sessao = sessao
         self.enc_linhas = None  # EncID cujas linhas estão na grelha de baixo
 
         topo = ttk.Frame(raiz, padding=(8, 8, 8, 4))
         topo.pack(fill="x")
-        self.barra = BarraEstado(raiz, sessao, nivel)
+        self.barra = BarraEstado(raiz, sessao, nivel, ao_logout)
         self.barra.pack(fill="x", side="bottom")
         SeletorNivel(topo, sessao, nivel, self._nivel_mudou).pack(side="left", anchor="n")
         self.refresh = Refrescamento(topo, sessao, self._tarefa_refresh, self._mostrar)

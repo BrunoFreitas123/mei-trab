@@ -10,10 +10,10 @@ SQL_LOG = ("SELECT TOP ({n}) NumReg, EventType, Objecto, Valor, Referencia, User
 
 
 class JanelaLog:
-    def __init__(self, raiz, sessao, nivel):
+    def __init__(self, raiz, sessao, nivel, ao_logout=None):
         topo = ttk.Frame(raiz, padding=(8, 8, 8, 4))
         topo.pack(fill="x")
-        self.barra = BarraEstado(raiz, sessao, nivel)
+        self.barra = BarraEstado(raiz, sessao, nivel, ao_logout)
         self.barra.pack(fill="x", side="bottom")
         SeletorNivel(topo, sessao, nivel, self._nivel_mudou).pack(side="left", anchor="n")
         ttk.Label(topo, text="N =").pack(side="left", padx=(24, 4), anchor="n")

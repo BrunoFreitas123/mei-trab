@@ -45,15 +45,17 @@ ERRO_LOCK_TIMEOUT = 1222
 ERRO_SNAPSHOT_DESATIVADO = 3952
 ERRO_CONFLITO_SNAPSHOT = 3960
 
+_REPETIR = "Para continuar, repita a operação (no Edit, abra a encomenda de novo para ver os valores atuais)."
+
 _EXPLICACOES = {
     ERRO_DEADLOCK: "Esta sessão foi escolhida como vítima de um deadlock. "
-                   "O SQL Server desfez a transação.",
+                   "O SQL Server desfez a transação.\n" + _REPETIR,
     ERRO_LOCK_TIMEOUT: "Esgotou-se o tempo de espera por um trinco (LOCK_TIMEOUT).",
     ERRO_SNAPSHOT_DESATIVADO: "O nível SNAPSHOT não está ativo nesta base de dados. Ative-o com:\n"
-                              "ALTER DATABASE MEI_TRAB SET ALLOW_SNAPSHOT_ISOLATION ON",
+                              "ALTER DATABASE <nome da base de dados> SET ALLOW_SNAPSHOT_ISOLATION ON",
     ERRO_CONFLITO_SNAPSHOT: "Conflito de atualização em SNAPSHOT: outra transação alterou e "
                             "confirmou estes dados depois de esta ter começado. "
-                            "O SQL Server desfez a transação.",
+                            "O SQL Server desfez a transação.\n" + _REPETIR,
 }
 
 _FICHEIRO_CONFIG = Path.home() / ".mei_trab_login.json"
@@ -176,6 +178,7 @@ class SessaoBD:
         self._tarefas = queue.Queue()
         self._resultados = queue.Queue()
         self._terminada = False
+        self._descartada = False  # depois de um logout, os resultados pendentes são ignorados
         threading.Thread(target=self._ciclo, daemon=True).start()
         self._recolher()
 
@@ -196,7 +199,12 @@ class SessaoBD:
         d = self.dados
         return f"{d['utilizador']}@{d['host']} · {d['base']} · SPID {self.spid} · {nivel}"
 
-    def fechar(self):
+    def fechar(self, descartar=False):
+        """Termina a thread da sessão e fecha a ligação depois das tarefas já agendadas.
+
+        Com descartar=True, os resultados que ainda cheguem já não são entregues à janela.
+        """
+        self._descartada = descartar
         self._tarefas.put(None)
 
     # -- thread da sessão --
@@ -246,7 +254,7 @@ class SessaoBD:
         try:
             while not self._resultados.empty():
                 funcao, valor = self._resultados.get_nowait()
-                if funcao:
+                if funcao and not self._descartada:
                     funcao(valor)
         finally:
             if not (self._terminada and self._resultados.empty()):
@@ -314,26 +322,34 @@ class SeletorNivel(ttk.Frame):
 
 
 class BarraEstado(ttk.Frame):
-    """Linha no fundo da janela: dados da sessão e aviso quando o servidor demora a responder."""
+    """Linha no fundo da janela: dados da sessão, aviso quando o servidor demora a responder
+    e, se ao_logout for indicado, o botão para terminar a sessão."""
 
-    def __init__(self, master, sessao, nivel):
+    def __init__(self, master, sessao, nivel, ao_logout=None):
         super().__init__(master, padding=(8, 3))
         self.sessao = sessao
         self.info = ttk.Label(self, text=sessao.descricao(nivel))
         self.info.pack(side="left")
+        if ao_logout:
+            ttk.Button(self, text="Logout", command=ao_logout).pack(side="right", padx=(8, 0))
         self.espera = ttk.Label(self, foreground="#b45309")
         self.espera.pack(side="right")
+        # O ciclo é agendado na janela de topo, que sobrevive ao logout; quando esta barra
+        # deixa de existir, o ciclo termina sozinho
+        self._topo = self.winfo_toplevel()
         self._atualizar()
 
     def mostrar_nivel(self, nivel):
         self.info.configure(text=self.sessao.descricao(nivel))
 
     def _atualizar(self):
+        if not self.winfo_exists():
+            return
         inicio = self.sessao.ocupada_desde
         decorrido = time.monotonic() - inicio if inicio else 0.0
         self.espera.configure(
             text=f"À espera do servidor há {decorrido:.1f} s (possível bloqueio)" if decorrido > 0.5 else "")
-        self.after(200, self._atualizar)
+        self._topo.after(200, self._atualizar)
 
 
 class Refrescamento(ttk.Frame):
@@ -359,6 +375,7 @@ class Refrescamento(ttk.Frame):
         self._refreshes = 0
         self._saltados = 0
         self._agendado = None
+        self._topo = self.winfo_toplevel()  # o timer é agendado aqui (ver BarraEstado)
 
         controlos = ttk.Frame(self)
         controlos.pack(fill="x")
@@ -402,7 +419,7 @@ class Refrescamento(ttk.Frame):
 
     def _mudou_auto(self):
         if self._agendado:
-            self.after_cancel(self._agendado)
+            self._topo.after_cancel(self._agendado)
             self._agendado = None
         if self.auto.get():
             self._ultimo_tick = None
@@ -412,7 +429,10 @@ class Refrescamento(ttk.Frame):
             self._tick()
 
     def _tick(self):
-        self._agendado = self.after(self._intervalo_ms(), self._tick)
+        if not self.winfo_exists():  # a janela foi fechada (logout)
+            self._agendado = None
+            return
+        self._agendado = self._topo.after(self._intervalo_ms(), self._tick)
         agora = time.perf_counter()
         if self._ultimo_tick is not None:
             self._intervalos.append(agora - self._ultimo_tick)
@@ -565,16 +585,65 @@ def _preparar_tk():
     return raiz
 
 
+class Aplicacao:
+    """Ciclo de vida de uma aplicação: login, janela de trabalho e logout (volta ao login).
+
+    criar_janela(raiz, sessao, nivel, ao_logout) cria a janela de trabalho dentro da raiz.
+    """
+
+    def __init__(self, titulo, nome_app, criar_janela, tamanho="900x600"):
+        self.titulo = titulo
+        self.nome_app = nome_app
+        self.criar_janela = criar_janela
+        self.raiz = _preparar_tk()
+        self.raiz.withdraw()
+        self.raiz.title(titulo)
+        self.raiz.geometry(tamanho)
+        self.sessao = None
+        self.janela = None
+        self.dialogo = None
+        self._mostrar_login()
+
+    def _mostrar_login(self):
+        self.dialogo = DialogoLogin(self.raiz, self.titulo, self.nome_app, self._ligada)
+
+    def _ligada(self, sessao, nivel):
+        self.dialogo = None
+        self.sessao = sessao
+        self.janela = self.criar_janela(self.raiz, sessao, nivel, self.logout)
+        self.raiz.deiconify()
+
+    def logout(self):
+        """Termina a sessão e volta ao login.
+
+        A janela trata antes do que for seu (o Edit faz ROLLBACK de uma transação aberta).
+        """
+        sessao = self.sessao
+        if sessao is None:
+            return
+        inicio = sessao.ocupada_desde
+        if inicio is not None and time.monotonic() - inicio > 0.5:
+            messagebox.showwarning(
+                self.titulo, "A sessão está à espera do servidor (possível bloqueio) e ainda não pode "
+                             "terminar.\nEspere que a consulta termine, ou feche a aplicação: a ligação é "
+                             "cortada e o SQL Server desfaz a transação aberta.", parent=self.raiz)
+            return
+        # Uma tarefa vazia no fim da fila garante que as tarefas já agendadas terminaram
+        sessao.executar(lambda _cursor: None, lambda _: self._terminar_sessao(sessao))
+
+    def _terminar_sessao(self, sessao):
+        if sessao is not self.sessao:
+            return
+        sessao.fechar(descartar=True)
+        self.sessao = None
+        self.janela = None
+        for widget in list(self.raiz.winfo_children()):
+            widget.destroy()
+        self.raiz.protocol("WM_DELETE_WINDOW", self.raiz.destroy)
+        self.raiz.withdraw()
+        self._mostrar_login()
+
+
 def iniciar_aplicacao(titulo, nome_app, criar_janela, tamanho="900x600"):
-    """Mostra o login e, depois de ligado, cria a janela principal com criar_janela(raiz, sessao, nivel)."""
-    raiz = _preparar_tk()
-    raiz.withdraw()
-    raiz.title(titulo)
-    raiz.geometry(tamanho)
-
-    def ligada(sessao, nivel):
-        criar_janela(raiz, sessao, nivel)
-        raiz.deiconify()
-
-    DialogoLogin(raiz, titulo, nome_app, ligada)
-    raiz.mainloop()
+    """Mostra o login e, depois de ligado, a janela de trabalho; o botão Logout volta ao login."""
+    Aplicacao(titulo, nome_app, criar_janela, tamanho).raiz.mainloop()

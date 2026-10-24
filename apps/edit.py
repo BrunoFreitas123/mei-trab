@@ -70,7 +70,7 @@ def transacoes_abertas(cursor):
 
 
 class JanelaEdit:
-    def __init__(self, raiz, sessao, nivel):
+    def __init__(self, raiz, sessao, nivel, ao_logout=None):
         self.raiz = raiz
         self.sessao = sessao
         self.enc_id = None
@@ -79,7 +79,8 @@ class JanelaEdit:
         self.commit_feito = False     # o COMMIT da transação atual já foi executado
         self.aberta_desde = None      # instante do BEGIN TRAN; None = sem transação
         self.ocupada = False          # há uma tarefa desta janela a correr na sessão
-        self.sair_no_fim = False
+        self.ao_logout = ao_logout
+        self.depois_de_terminar = None  # sair ou fazer logout quando a transação terminar
         self.linhas = []              # (ProdutoID, Designacao, Preco) como foram lidas
         self.morada_bd = None         # morada na base de dados (vista por esta transação)
         self.qtds_bd = {}             # ProdutoID -> Qtd na base de dados
@@ -90,7 +91,7 @@ class JanelaEdit:
 
         topo = ttk.Frame(raiz, padding=(8, 8, 8, 4))
         topo.pack(fill="x")
-        self.barra = BarraEstado(raiz, sessao, nivel)
+        self.barra = BarraEstado(raiz, sessao, nivel, self._logout if ao_logout else None)
         self.barra.pack(fill="x", side="bottom")
         self.seletor = SeletorNivel(topo, sessao, nivel, self.barra.mostrar_nivel)
         self.seletor.pack(side="left")
@@ -257,8 +258,7 @@ class JanelaEdit:
         acao = "guardada (COMMIT)" if confirmada else "descartada (ROLLBACK)"
         self._limpar(f"Encomenda {self.enc_id}: transação {acao} às {hora}.")
         self._avisar_em_falta(em_falta)
-        if self.sair_no_fim:
-            self.raiz.destroy()
+        self._seguir()
 
     # -- erros --
 
@@ -272,6 +272,7 @@ class JanelaEdit:
         if abertas > 0:
             if self.aberta_desde is None:
                 self.aberta_desde = time.monotonic()
+            self.depois_de_terminar = None  # a transação continua aberta: não sai nem faz logout
             self._atualizar_controlos()
             return
         if self.registo_pendente:
@@ -284,8 +285,7 @@ class JanelaEdit:
             self._limpar(f"Encomenda {self.enc_id}: transação guardada (COMMIT).")
         else:
             self._limpar(f"Encomenda {self.enc_id}: a transação terminou sem ser guardada.")
-        if self.sair_no_fim:
-            self.raiz.destroy()
+        self._seguir()
 
     def _falhou_sincronizar(self, exc):
         self._libertar()
@@ -418,6 +418,8 @@ class JanelaEdit:
         self.seletor.ativar(livre and not aberta)
 
     def _relogio(self):
+        if not self.lbl_transacao.winfo_exists():  # a janela foi fechada (logout)
+            return
         if self.aberta_desde is not None:
             morada, qtds = self._pendentes()
             n = len(qtds) + (morada is not None)
@@ -441,8 +443,27 @@ class JanelaEdit:
             self.raiz.destroy()
             return
         if messagebox.askyesno("Edit", "Há uma transação aberta. Descartar (ROLLBACK) e sair?", parent=self.raiz):
-            self.sair_no_fim = True
+            self.depois_de_terminar = self.raiz.destroy
             self._terminar(False)
+
+    def _logout(self):
+        if self.ocupada:
+            messagebox.showinfo("Edit", "Espere que a operação em curso termine antes de terminar a sessão.",
+                                parent=self.raiz)
+            return
+        if self.aberta_desde is None:
+            self.ao_logout()
+            return
+        if messagebox.askyesno("Edit", "Há uma transação aberta. Descartar (ROLLBACK) e terminar a sessão?",
+                               parent=self.raiz):
+            self.depois_de_terminar = self.ao_logout
+            self._terminar(False)
+
+    def _seguir(self):
+        """Executa o que ficou à espera do fim da transação: fechar a janela ou fazer logout."""
+        acao, self.depois_de_terminar = self.depois_de_terminar, None
+        if acao:
+            acao()
 
 
 if __name__ == "__main__":

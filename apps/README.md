@@ -56,6 +56,10 @@ No fundo de cada janela aparecem o utilizador, a base de dados, o **SPID** da se
 
 Quando uma instrução demora mais de 0,5 s, aparece **"À espera do servidor há X s (possível bloqueio)"**. É assim que se vê uma sessão bloqueada por um trinco de outra. A janela continua a responder, porque as instruções correm numa thread à parte.
 
+O botão **Logout**, à direita da barra, termina a sessão e volta à janela de login (por exemplo, para entrar com outro utilizador ou noutro servidor):
+- No Edit, se houver uma transação aberta, pede confirmação e faz ROLLBACK antes de sair.
+- Se a sessão estiver bloqueada à espera do servidor, o logout só é possível quando a consulta terminar. Em alternativa, fecha-se a aplicação: a ligação é cortada e o SQL Server desfaz a transação aberta.
+
 ## Edit
 
 | Botão | Instrução | Passo do enunciado (4.1) |
